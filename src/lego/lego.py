@@ -17,7 +17,8 @@ def lego(
         'k_nn': 9,
         'metric': 'euclidean',
         'n_eig_for_grad': 40,
-        'r_tol': 1e-1
+        'r_tol': 1e-1,
+        'reg_grad': True
     }
     default_gl_opts = {
         'which': 'diffusion',
@@ -71,13 +72,16 @@ def lego(
         # compute (pinv(X_k) phi_k)^T
         grad_eig_foa[:,k,:] = X_k_pinv.dot(phi_k).T
 
-    # regularize gradients by projecting on the eigenvectors
-    # orthogonalize eigenvectors first
-    U_phi = svd(phi, full_matrices=False)[0] # (n_samples, n_eig)
-    reg_grad_eig = np.zeros_like(grad_eig_foa)
-    for i in range(n_eig_for_grad):
-        temp = U_phi.T.dot(grad_eig_foa[i,:,:]) # n_eig x ambient_dim
-        reg_grad_eig[i,:,:] = U_phi.dot(temp) # n_samples x ambient_dim
+    if opts['reg_grad']:
+        # regularize gradients by projecting on the eigenvectors
+        # orthogonalize eigenvectors first
+        U_phi = svd(phi, full_matrices=False)[0] # (n_samples, n_eig)
+        reg_grad_eig = np.zeros_like(grad_eig_foa)
+        for i in range(n_eig_for_grad):
+            temp = U_phi.T.dot(grad_eig_foa[i,:,:]) # n_eig x ambient_dim
+            reg_grad_eig[i,:,:] = U_phi.dot(temp) # n_samples x ambient_dim
+    else:
+        reg_grad_eig = grad_eig_foa
 
     # finally orthogonalize gradients to estimate basis of tangent spaces 
     emb_dim = opts['emb_dim']
