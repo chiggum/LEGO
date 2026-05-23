@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.integrate as integrate
 from scipy.optimize import fsolve
+from scipy.stats import truncnorm
 from PIL import Image, ImageOps
 from sklearn.decomposition import PCA
 import os
@@ -35,7 +36,7 @@ def noisyswissroll(
     X=np.concatenate([rmax*tv*np.cos(tv), heightv, rmax*tv*np.sin(tv)], axis=1)
     
     np.random.seed(seed)
-    if noise_type == 'normal':
+    if noise_type == 'gaussian':
         X = X+noise*np.random.normal(0,1,[X.shape[0],3])
     elif noise_type == 'uniform':
         X = X+noise*np.random.uniform(0,1,[X.shape[0],3])
@@ -46,115 +47,77 @@ def noisyswissroll(
         temp = temp/np.linalg.norm(temp, axis=1)[:,None]
         if noise_type == 'ortho-uniform':
             X = X + noise*np.random.uniform(-1,1,(X.shape[0],1))*temp
-        else:
+        else: # ortho-gaussian
             X = X + noise*np.random.normal(0,1,(X.shape[0],1))*temp
     
     labels = np.concatenate([tv, X[:,[1]]], axis=1)
     return X, labels
 
 def wave_on_curvedtorus3d(
-    n=10000, noise=0, noise_type='ortho',
-    Rmax=0.25, seed=42, freq=4, density='uniform',
-    wave_amp_r=0.2, wave_freq_r=5, wave_amp_R=0.1, wave_freq_R=3, rmax=None
+    n=10000, noise=0, noise_type='ortho', Rmax=0.25, seed=42, freq=4, 
+    density='uniform', wave_amp_r=0.2, wave_freq_r=5, wave_amp_R=0.1, 
+    wave_freq_R=3, rmax=None
 ):
-    if rmax is None:
-        rmax=1/(4*(np.pi**2)*Rmax)
-
-    theta = np.pi
-    phi = (3*np.pi)/(2*wave_freq_r + 1e-12)
-    r_ = rmax + wave_amp_r * rmax * np.sin(wave_freq_r * phi)
-    R_ = Rmax + wave_amp_R * Rmax * np.sin(wave_freq_R * theta)
-
-    r_prime_ = wave_freq_r * wave_amp_r * np.cos(wave_freq_r * phi)
-    R_prime_ = wave_freq_R * wave_amp_R * np.cos(wave_freq_R * theta)
-    
-    X_theta_ = np.array([(R_prime_ - r_*np.sin(theta))*np.cos(phi),
-                            (R_prime_ - r_*np.sin(theta))*np.sin(phi),
-                            r_*np.cos(theta)])
-    X_phi_ = np.array([r_prime_*np.cos(theta)*np.cos(phi) - (R_+r_*np.cos(theta))*np.sin(phi),
-                        r_prime_*np.cos(theta)*np.sin(phi) + (R_+r_*np.cos(theta))*np.cos(phi),
-                        r_prime_*np.sin(theta)])
-    X_theta_cross_X_phi_max = np.linalg.norm(np.cross(X_theta_, X_phi_))
-
-    X = []
-    thetav = []
-    phiv = []
     np.random.seed(seed)
-    k = 0
-    sigma = 0.75*np.pi
-    while k < n:
-        rU = np.random.uniform(0,1,3)
-        if density != 'uniform':
-            #theta = np.mod(sigma*np.random.normal(0, 1), 2*np.pi)
-            theta = truncnorm.rvs(a=-np.pi/sigma,b=np.pi/sigma,scale=sigma)
-        else:
-            theta = 2*np.pi*rU[0]
-        phi = 2*np.pi*rU[1]
+    rmax = rmax if rmax is not None else 1 / (4 * np.pi**2 * Rmax)
 
-        r_ = rmax + wave_amp_r * rmax * np.sin(wave_freq_r * phi)
-        R_ = Rmax + wave_amp_R * Rmax * np.sin(wave_freq_R * theta)
+    # Helper to calculate surface points, derivatives, and area elements all at once
+    def get_surface(theta, phi):
+        r = rmax * (1 + wave_amp_r * np.sin(wave_freq_r * phi))
+        R = Rmax * (1 + wave_amp_R * np.sin(wave_freq_R * theta))
+        r_p = rmax * wave_amp_r * wave_freq_r * np.cos(wave_freq_r * phi)
+        R_p = Rmax * wave_amp_R * wave_freq_R * np.cos(wave_freq_R * theta)
 
-        r_prime_ = wave_freq_r * wave_amp_r * np.cos(wave_freq_r * phi)
-        R_prime_ = wave_freq_R * wave_amp_R * np.cos(wave_freq_R * theta)
+        X  = np.c_[(R + r*np.cos(theta))*np.cos(phi), (R + r*np.cos(theta))*np.sin(phi), r*np.sin(theta)]
+        Xt = np.c_[(R_p - r*np.sin(theta))*np.cos(phi), (R_p - r*np.sin(theta))*np.sin(phi), r*np.cos(theta)]
+        Xp = np.c_[r_p*np.cos(theta)*np.cos(phi) - (R + r*np.cos(theta))*np.sin(phi),
+                   r_p*np.cos(theta)*np.sin(phi) + (R + r*np.cos(theta))*np.cos(phi), r_p*np.sin(theta)]
         
-        X_theta_ = np.array([(R_prime_ - r_*np.sin(theta))*np.cos(phi),
-                                (R_prime_ - r_*np.sin(theta))*np.sin(phi),
-                                r_*np.cos(theta)])
-        X_phi_ = np.array([r_prime_*np.cos(theta)*np.cos(phi) - (R_+r_*np.cos(theta))*np.sin(phi),
-                            r_prime_*np.cos(theta)*np.sin(phi) + (R_+r_*np.cos(theta))*np.cos(phi),
-                            r_prime_*np.sin(theta)])
-        X_theta_cross_X_phi = np.linalg.norm(np.cross(X_theta_, X_phi_))
-        X_theta_cross_X_phi = X_theta_cross_X_phi/X_theta_cross_X_phi_max
+        norm = np.cross(Xt, Xp)
+        return X, Xt, Xp, norm, np.linalg.norm(norm, axis=1)
 
-        #if rU[2] <= (Rmax + rmax*np.cos(theta))/(Rmax + rmax):
-        #if rU[2] <= (R_ + r_*np.cos(theta))/(R_ + r_):
-        if rU[2] <= X_theta_cross_X_phi:
-            thetav.append(theta)
-            phiv.append(phi)
-            k = k + 1
-    
-    thetav = np.array(thetav)[:,None]
-    phiv = np.array(phiv)[:,None]
-    dX = None
+    # 1. Estimate maximum area using a quick 100x100 grid
+    tg, pg = np.mgrid[0:2*np.pi:100j, 0:2*np.pi:100j]
+    max_area = get_surface(tg.ravel(), pg.ravel())[4].max() * 1.05 # safety buffer
 
-    r = rmax + wave_amp_r * rmax * np.sin(wave_freq_r * phiv)
-    R = Rmax + wave_amp_R * Rmax * np.sin(wave_freq_R * thetav)
-    X = np.concatenate([(R+r*np.cos(thetav))*np.cos(phiv),
-                            (R+r*np.cos(thetav))*np.sin(phiv),
-                            r*np.sin(thetav)], axis=1)
-    
-    np.random.seed(42)
-    if 'uniform' in noise_type:
-        noise = noise*np.random.uniform(-1,1,(X.shape[0],1))
-    elif 'gaussian' in noise_type:
-        noise = noise*np.random.normal(0,1,(X.shape[0],1))
+    # 2. Vectorized Rejection Sampling (Batches of 2*n for speed)
+    th_v, ph_v = np.empty(0), np.empty(0)
+    while len(th_v) < n:
+        th = np.random.uniform(0, 2*np.pi, n*2) if density == 'uniform' else \
+             truncnorm.rvs(a=-2, b=2, scale=0.5*np.pi, size=n*2)
+        ph = np.random.uniform(0, 2*np.pi, n*2)
+        
+        area = get_surface(th, ph)[4]
+        valid = np.random.uniform(0, 1, n*2) <= (area / max_area)
+        
+        th_v, ph_v = np.append(th_v, th[valid]), np.append(ph_v, ph[valid])
+
+    th_v, ph_v = th_v[:n, None], ph_v[:n, None]
+
+    # 3. Generate final clean surface points and unit vectors
+    X, Xt, Xp, normal, _ = get_surface(th_v, ph_v)
+    norm_unit = normal / np.linalg.norm(normal, axis=1)[:, None]
+
+    # 4. Generate and apply noise
+    if noise > 0:
+        if noise_type == 'ortho-uniform':        n_vals = np.random.uniform(-1, 1, (n, 1))
+        elif noise_type == 'ortho-gaussian':     n_vals = np.random.normal(0, 1, (n, 1))
+        elif noise_type == 'ortho-hetero-uniform':n_vals = np.random.uniform(-np.cos(freq*ph_v)**2, np.cos(freq*ph_v)**2)
+        elif noise_type == 'ortho-hetero-gaussian':n_vals = np.random.normal(0, np.cos(freq*ph_v)**2)
+        else:                              n_vals = 0
+
+        X_noisy = X + (noise * n_vals) * norm_unit
     else:
-        #noise_u = 0.01 + 0.3*(1+np.cos(freq*phiv))/2
-        noise_u = np.cos(freq*phiv)**2
-        noise_u = np.random.uniform(-noise_u,noise_u)
-        noise = noise*noise_u
+        X_noisy = X
+    Xt_unit = Xt / np.linalg.norm(Xt, axis=1)[:, None]
+    Xp_unit = Xp / np.linalg.norm(Xp, axis=1)[:, None]
 
-    r_prime = wave_freq_r * wave_amp_r * rmax * np.cos(wave_freq_r * phiv)
-    R_prime = wave_freq_R * wave_amp_R * Rmax * np.cos(wave_freq_R * thetav)
-    X_theta = np.concatenate([(R_prime - r*np.sin(thetav))*np.cos(phiv),
-                            (R_prime - r*np.sin(thetav))*np.sin(phiv),
-                                r*np.cos(thetav)], axis=1)
-    X_phi = np.concatenate([r_prime*np.cos(thetav)*np.cos(phiv) - (R+r*np.cos(thetav))*np.sin(phiv),
-                            r_prime*np.cos(thetav)*np.sin(phiv) + (R+r*np.cos(thetav))*np.cos(phiv),
-                            r_prime*np.sin(thetav)], axis=1)
-    normal_dir = np.cross(X_theta, X_phi)
-    normal_dir = normal_dir/np.linalg.norm(normal_dir, axis=1)[:,None]
-    X_noisy = X + noise * normal_dir
+    return X_noisy, X, np.c_[np.mod(th_v, 2*np.pi), ph_v], None, (Xt_unit, Xp_unit, norm_unit)
 
-    X_theta = X_theta/np.linalg.norm(X_theta,axis=1)[:,None]
-    X_phi = X_phi/np.linalg.norm(X_phi,axis=1)[:,None]
-
-    labelsMat = np.concatenate([np.mod(thetav, 2*np.pi), phiv], axis=1)
-    return X_noisy, X, labelsMat, dX, (X_theta, X_phi, normal_dir)
-
+# generates a clean torus
 def curvedtorus3d_with_normal_dir(n=10000, density='uniform', seed=42):
     _, X, labelsMat, _, (_, _, normal_dir) = wave_on_curvedtorus3d(
-        n=n, noise=0, noise_type='ortho',
+        n=n, noise=0, noise_type='ortho-uniform',
         seed=seed, density=density,
         wave_amp_r=0, wave_freq_r=0, wave_amp_R=0,
         wave_freq_R=0, rmax=None
