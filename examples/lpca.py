@@ -11,7 +11,9 @@ def lpca(
         'emb_dim': 2,
         'explain_var': 0,
         'k_nn': 9,
-        'metric': 'euclidean'
+        'metric': 'euclidean',
+        'kernel': None,
+        'bandwidth': None
     }
     default_opts.update(opts)
     opts = default_opts
@@ -33,6 +35,23 @@ def lpca(
         local_mean[k,:] = np.mean(X_k, axis=0)
         X_k = X_k - local_mean[k,:][None,:]
         X_k = X_k.T
+
+        if opts['kernel'] is not None:
+            dist_k = np.linalg.norm(X_k, axis=0)
+            if opts['bandwidth'] is not None:
+                ndist_k = dist_k/opts['bandwidth']
+            else:
+                ndist_k = dist_k/np.max(dist_k)
+            
+            if opts['kernel'] == 'epanechnikov':
+                ker_k = 1-ndist_k**2
+            elif opts['kernel'] =='gaussian':
+                ker_k = np.exp(-ndist_k**2)
+            else:
+                raise NotImplementedError("Only epanechnikov kernel is available.")
+            
+            ker_k = np.sqrt(ker_k)
+            X_k = X_k * ker_k[None,:]
         
         if emb_dim == ambient_dim:
             Q_k, Sigma_k, _ = svd(X_k) # Q_k.shape = (ambient_dim, ambient_dim)

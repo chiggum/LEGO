@@ -13,12 +13,14 @@ def lego(
 ):
     default_opts = {
         'emb_dim': 2,
-        'explain_var': 0,
+        'explain_var': None,
         'k_nn': 9,
         'metric': 'euclidean',
         'n_eig_for_grad': 40,
-        'r_tol': 1e-1,
-        'reg_grad': True
+        'kernel_for_grad': None,
+        'r_tol': 1e-2, # Higher value (e.g. 1e-1) needed for clean data to prevent blow up during pinv
+        'reg_grad': True,
+        'tikhonov': False
     }
     default_gl_opts = {
         'which': 'diffusion',
@@ -57,16 +59,33 @@ def lego(
     # compute first order approximation of gradients of eigenvectors
     n_eig_for_grad = opts['n_eig_for_grad']
     grad_eig_foa = np.zeros((n_eig_for_grad, n_samples, ambient_dim))
+    n_survived_dim_in_pinv = np.zeros(n_samples)
     for k in range(n_samples):
         nbrs = neigh_ind[k,:]
         X_k = X[nbrs,:] - X[k,:][None,:]
         phi_k = phi[nbrs,:n_eig_for_grad] - phi[k,:n_eig_for_grad][None,:]
 
+        if opts['kernel_for_grad'] is not None:
+            if opts['kernel_for_grad'] == 'epanechnikov':
+                dist_k = np.linalg.norm(X_k, axis=1)
+                ndist_k = dist_k/np.max(dist_k)
+                ker_k = 1-ndist_k**2
+                ker_k = np.sqrt(ker_k)
+                X_k = X_k * ker_k[:,None]
+                phi_k = phi_k * ker_k[:,None]
+            else:
+                raise NotImplementedError("Only epanechnikov kernel is available.")
+
         # compute pinv(X_k)
         Uk, Sk, Vk_T = svd(X_k, full_matrices=False) # X_k = U_kS_kV_k^T
-        Sk_pinv = np.zeros_like(Sk)
-        mask = Sk**2 <= opts['r_tol']*(Sk[0]**2)
-        Sk_pinv[~mask] = 1/Sk[~mask] 
+        if opts['tikhonov']:
+            Sk_pinv = Sk/(Sk**2 + opts['r_tol']*(Sk[0]**2))
+            n_survived_dim_in_pinv[k] = ambient_dim
+        else:
+            Sk_pinv = np.zeros_like(Sk)
+            mask = Sk**2 <= opts['r_tol']*(Sk[0]**2)
+            n_survived_dim_in_pinv[k] = np.sum(~mask)
+            Sk_pinv[~mask] = 1/Sk[~mask] 
         X_k_pinv = Vk_T.T.dot(Sk_pinv[:,None] * Uk.T) # X_k_pinv = V_k S_k_pinv U_k^T
 
         # compute (pinv(X_k) phi_k)^T
@@ -104,7 +123,7 @@ def lego(
         var_explained[k,:] = Sigma_k**2
         var_explained[k,:] /= np.sum(var_explained[k,:])
 
-        if opts['explain_var'] > 0:
+        if opts['explain_var'] is not None:
             emb_dim_k = min(emb_dim, np.argmax(np.cumsum(var_explained[k,:]) >= opts['explain_var'])+1)
         else:
             emb_dim_k = emb_dim
@@ -114,11 +133,14 @@ def lego(
     output = {
         'local_mean': local_mean,
         'var_explained': var_explained,
-        'tang_basis': tang_basis
+        'tang_basis': tang_basis,
     }
 
     if return_aux_info:
-        output['phi'] = phi
-        output['reg_grad_eig'] = reg_grad_eig
+        output.update({
+            'phi': phi,
+            'reg_grad_eig': reg_grad_eig,
+            'n_survived_dim_in_pinv': n_survived_dim_in_pinv
+        })
 
     return output
