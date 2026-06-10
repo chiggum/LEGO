@@ -18,9 +18,9 @@ def lego(
         'metric': 'euclidean',
         'n_eig_for_grad': 40,
         'kernel_for_grad': None,
-        'r_tol': 1e-2, # Higher value (e.g. 1e-1) needed for clean data to prevent blow up during pinv
+        'r_tol': 1e-2, # Higher value (e.g. 1e-1) may be needed for clean data to prevent blow up during pinv
         'reg_grad': True,
-        'tikhonov': False
+        'tikhonov': True
     }
     default_gl_opts = {
         'which': 'diffusion',
@@ -79,13 +79,14 @@ def lego(
         # compute pinv(X_k)
         Uk, Sk, Vk_T = svd(X_k, full_matrices=False) # X_k = U_kS_kV_k^T
         if opts['tikhonov']:
-            Sk_pinv = Sk/(Sk**2 + opts['r_tol']*(Sk[0]**2))
+            Sk_pinv = Sk/(Sk**2 + opts['r_tol']*np.sum(Sk**2))
             n_survived_dim_in_pinv[k] = ambient_dim
         else:
             Sk_pinv = np.zeros_like(Sk)
             mask = Sk**2 <= opts['r_tol']*(Sk[0]**2)
             n_survived_dim_in_pinv[k] = np.sum(~mask)
             Sk_pinv[~mask] = 1/Sk[~mask] 
+        
         X_k_pinv = Vk_T.T.dot(Sk_pinv[:,None] * Uk.T) # X_k_pinv = V_k S_k_pinv U_k^T
 
         # compute (pinv(X_k) phi_k)^T
