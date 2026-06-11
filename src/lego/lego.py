@@ -18,7 +18,7 @@ def lego(
         'metric': 'euclidean',
         'n_eig_for_grad': 40,
         'kernel_for_grad': None,
-        'r_tol': 1e-2, # Higher value (e.g. 1e-1) may be needed for clean data to prevent blow up during pinv
+        'r_tol': 1e-1, # Higher value (e.g. 1e-1) may be needed for clean data to prevent blow up during pinv
         'reg_grad': True,
         'tikhonov': True
     }
