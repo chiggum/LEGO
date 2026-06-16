@@ -18,9 +18,12 @@ def lego(
         'metric': 'euclidean',
         'n_eig_for_grad': 40,
         'kernel_for_grad': None,
-        'r_tol': 1e-1, # Higher value (e.g. 1e-1) may be needed for clean data to prevent blow up during pinv
+        # Higher value (e.g. 1e-1) may be needed for clean data
+        # to prevent blow up during pinv if not using tikhonov
+        'r_tol': 1e-2,
         'reg_grad': True,
-        'tikhonov': True
+        'tikhonov': True,
+        'tikhonov_power': 1/2,
     }
     default_gl_opts = {
         'which': 'diffusion',
@@ -48,6 +51,7 @@ def lego(
 
     # find nearest neighbors (includes self-loops at first index)
     neigh_ind, neigh_dist = util.nearest_neighbors(X, opts['k_nn'], opts['metric'])
+    diam = util.point_cloud_diameter(X)
 
     # compute eigenvectors of the graph Laplacian
     # these also contain trivial eigenvectors if n_ignore is zero
@@ -79,7 +83,9 @@ def lego(
         # compute pinv(X_k)
         Uk, Sk, Vk_T = svd(X_k, full_matrices=False) # X_k = U_kS_kV_k^T
         if opts['tikhonov']:
-            Sk_pinv = Sk/(Sk**2 + opts['r_tol']*np.sum(Sk**2))
+            reg_param = np.sum(Sk**(2*(1+opts['tikhonov_power'])))
+            reg_param = reg_param/(diam**(2*opts['tikhonov_power']))
+            Sk_pinv = Sk/(Sk**2 + reg_param)
             n_survived_dim_in_pinv[k] = ambient_dim
         else:
             Sk_pinv = np.zeros_like(Sk)
