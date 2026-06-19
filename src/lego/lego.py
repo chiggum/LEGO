@@ -45,7 +45,9 @@ def lego(
         gl_opts['k_tune'] = opts['k_nn']-1 # minus 1 because k_nn includes self but k_tune does not
     if opts['n_eig_for_grad'] == -1:
         opts['n_eig_for_grad'] = gl_opts['n_eig']
-
+    if not opts['reg_grad']:
+        gl_opts['n_eig'] = opts['n_eig_for_grad']
+        
     assert gl_opts['n_eig'] >= opts['n_eig_for_grad'], "gl_opts['n_eig'] < opts['n_eig_for_grad'."
     assert opts['emb_dim'] <= ambient_dim, "opts['emb_dim'] > ambient_dim."
 
