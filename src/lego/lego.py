@@ -1,3 +1,4 @@
+import time
 import numpy as np
 from . import util
 from . import gl
@@ -24,6 +25,7 @@ def lego(
         'reg_grad': True,
         'tikhonov': True,
         'tikhonov_power': 1/2,
+        'print_time': True
     }
     default_gl_opts = {
         'which': 'diffusion',
@@ -48,24 +50,40 @@ def lego(
     if not opts['reg_grad']:
         gl_opts['n_eig'] = opts['n_eig_for_grad']
         
-    assert gl_opts['n_eig'] >= opts['n_eig_for_grad'], "gl_opts['n_eig'] < opts['n_eig_for_grad'."
+    assert gl_opts['n_eig'] >= opts['n_eig_for_grad'], "gl_opts['n_eig'] < opts['n_eig_for_grad']."
     assert opts['emb_dim'] <= ambient_dim, "opts['emb_dim'] > ambient_dim."
+    
+    total_start = time.perf_counter() if opts['print_time'] else None
 
-    # find nearest neighbors (includes self-loops at first index)
+    # --- 1. Nearest Neighbors ---
+    t0 = time.perf_counter() if opts['print_time'] else None
+    
     neigh_ind, neigh_dist = util.nearest_neighbors(X, opts['k_nn'], opts['metric'])
     diam = util.point_cloud_diameter(X)
+    
+    if opts['print_time']:
+        print(f"[LEGO] Nearest neighbors & diameter: {time.perf_counter() - t0:.4f} s")
 
+    # --- 2. Graph Laplacian Spectrum ---
+    t0 = time.perf_counter() if opts['print_time'] else None
+    
     # compute eigenvectors of the graph Laplacian
     # these also contain trivial eigenvectors if n_ignore is zero
     _, phi = gl.spectrum_of_laplacian_from_neighbors(
         neigh_ind[:,1:], neigh_dist[:,1:], # remove self-loops
         opts = gl_opts
     )
+    
+    if opts['print_time']:
+        print(f"[LEGO] Graph Laplacian spectrum: {time.perf_counter() - t0:.4f} s")
 
-    # compute first order approximation of gradients of eigenvectors
+    # --- 3. First Order Approximation of Gradients ---
+    t0 = time.perf_counter() if opts['print_time'] else None
+    
     n_eig_for_grad = opts['n_eig_for_grad']
     grad_eig_foa = np.zeros((n_eig_for_grad, n_samples, ambient_dim))
     n_survived_dim_in_pinv = np.zeros(n_samples)
+    
     for k in range(n_samples):
         nbrs = neigh_ind[k,:]
         X_k = X[nbrs,:] - X[k,:][None,:]
@@ -82,7 +100,7 @@ def lego(
             else:
                 raise NotImplementedError("Only epanechnikov kernel is available.")
 
-        # compute pinv(X_k)
+        # Compute common SVD values for regularization
         Uk, Sk, Vk_T = svd(X_k, full_matrices=False) # X_k = U_kS_kV_k^T
         if opts['tikhonov']:
             reg_param = np.sum(Sk**(2*(1+opts['tikhonov_power'])))
@@ -94,13 +112,17 @@ def lego(
             mask = Sk**2 <= opts['r_tol']*(Sk[0]**2)
             n_survived_dim_in_pinv[k] = np.sum(~mask)
             Sk_pinv[~mask] = 1/Sk[~mask] 
-        
-        X_k_pinv = Vk_T.T.dot(Sk_pinv[:,None] * Uk.T) # X_k_pinv = V_k S_k_pinv U_k^T
 
-        # compute (pinv(X_k) phi_k)^T
+        X_k_pinv = Vk_T.T.dot(Sk_pinv[:,None] * Uk.T) # X_k_pinv = V_k S_k_pinv U_k^T
         grad_eig_foa[:,k,:] = X_k_pinv.dot(phi_k).T
 
+    if opts['print_time']:
+        print(f"[LEGO] Gradient first-order approx: {time.perf_counter() - t0:.4f} s")
+
+    # --- 4. Regularize Gradients ---
     if opts['reg_grad']:
+        t0 = time.perf_counter() if opts['print_time'] else None
+        
         # regularize gradients by projecting on the eigenvectors
         # orthogonalize eigenvectors first
         U_phi = svd(phi, full_matrices=False)[0] # (n_samples, n_eig)
@@ -108,14 +130,21 @@ def lego(
         for i in range(n_eig_for_grad):
             temp = U_phi.T.dot(grad_eig_foa[i,:,:]) # n_eig x ambient_dim
             reg_grad_eig[i,:,:] = U_phi.dot(temp) # n_samples x ambient_dim
+            
+        if opts['print_time']:
+            print(f"[LEGO] Gradient regularization: {time.perf_counter() - t0:.4f} s")
     else:
         reg_grad_eig = grad_eig_foa
 
+    # --- 5. Tangent Space Basis Estimation ---
+    t0 = time.perf_counter() if opts['print_time'] else None
+    
     # finally orthogonalize gradients to estimate basis of tangent spaces 
     emb_dim = opts['emb_dim']
     var_explained = np.zeros((n_samples, emb_dim))
     local_mean = np.zeros((n_samples, ambient_dim))
     tang_basis = np.zeros((n_samples, emb_dim, ambient_dim))
+    
     for k in range(n_samples):
         nbrs = neigh_ind[k,:]
         local_mean[k,:] = np.mean(X[nbrs,:], axis=0)
@@ -130,14 +159,23 @@ def lego(
             )  # Q_k.shape = (ambient_dim, emb_dim)
         
         var_explained[k,:] = Sigma_k**2
-        var_explained[k,:] /= np.sum(var_explained[k,:])
+        
+        # Guard against zero-division if variance is absolutely zero
+        sum_var = np.sum(var_explained[k,:])
+        if sum_var > 0:
+            var_explained[k,:] /= sum_var
 
         if opts['explain_var'] is not None:
             emb_dim_k = min(emb_dim, np.argmax(np.cumsum(var_explained[k,:]) >= opts['explain_var'])+1)
         else:
             emb_dim_k = emb_dim
+
         Q_k = Q_k[:,:emb_dim_k]
         tang_basis[k,:emb_dim_k,:] = Q_k.T
+
+    if opts['print_time']:
+        print(f"[LEGO] Tangent basis estimation: {time.perf_counter() - t0:.4f} s")
+        print(f"[LEGO] Total execution time: {time.perf_counter() - total_start:.4f} s\n")
 
     output = {
         'local_mean': local_mean,
