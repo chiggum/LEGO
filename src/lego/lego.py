@@ -58,11 +58,11 @@ def lego(
     # --- 1. Nearest Neighbors ---
     t0 = time.perf_counter() if opts['print_time'] else None
     
+    X = util.normalize_diameter(X)
     neigh_ind, neigh_dist = util.nearest_neighbors(X, opts['k_nn'], opts['metric'])
-    diam = util.point_cloud_diameter(X)
     
     if opts['print_time']:
-        print(f"[LEGO] Nearest neighbors & diameter: {time.perf_counter() - t0:.4f} s")
+        print(f"[LEGO] Diameter normalization & Nearest neighbors: {time.perf_counter() - t0:.4f} s")
 
     # --- 2. Graph Laplacian Spectrum ---
     t0 = time.perf_counter() if opts['print_time'] else None
@@ -104,7 +104,6 @@ def lego(
         Uk, Sk, Vk_T = svd(X_k, full_matrices=False) # X_k = U_kS_kV_k^T
         if opts['tikhonov']:
             reg_param = np.sum(Sk**(2*(1+opts['tikhonov_power'])))
-            reg_param = reg_param/(diam**(2*opts['tikhonov_power']))
             Sk_pinv = Sk/(Sk**2 + reg_param)
             n_survived_dim_in_pinv[k] = ambient_dim
         else:

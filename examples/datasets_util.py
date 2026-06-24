@@ -111,18 +111,19 @@ def wave_on_curvedtorus3d(
         X_noisy = X
     Xt_unit = Xt / np.linalg.norm(Xt, axis=1)[:, None]
     Xp_unit = Xp / np.linalg.norm(Xp, axis=1)[:, None]
+    tang_basis = np.concatenate([Xt_unit[:,None,:], Xp_unit[:,None,:]], axis=1)
 
-    return X_noisy, X, np.c_[np.mod(th_v, 2*np.pi), ph_v], None, (Xt_unit, Xp_unit, norm_unit)
+    return X_noisy, X, np.c_[np.mod(th_v, 2*np.pi), ph_v], None, (tang_basis, norm_unit)
 
 # generates a clean torus
 def curvedtorus3d_with_normal_dir(n=10000, density='uniform', seed=42):
-    _, X, labelsMat, _, (_, _, normal_dir) = wave_on_curvedtorus3d(
+    _, X, labelsMat, _, (tang_basis, normal_dir) = wave_on_curvedtorus3d(
         n=n, noise=0, noise_type='ortho-uniform',
         seed=seed, density=density,
         wave_amp_r=0, wave_freq_r=0, wave_amp_R=0,
         wave_freq_R=0, rmax=None
     )
-    return X, labelsMat, normal_dir
+    return X, labelsMat, tang_basis, normal_dir
 
 def read_img(fpath, grayscale=False, bbox=None):
     if grayscale:
